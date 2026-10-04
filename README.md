@@ -46,22 +46,8 @@
 ## Установка
 
 Каталог `mtai.kerberos/` — в `local/modules/`. Затем: **Настройки → Модули**
-(или CLI-скриптом, как на тест-стенде). Установщик регистрирует обработчики
+→ установить `mtai.kerberos`. Установщик регистрирует обработчики
 и страницу диагностики в `/bitrix/admin/mtai_kerberos_diag.php`.
-
-CLI-установка на стенде:
-
-```bash
-docker compose exec php php -r '
-$_SERVER["DOCUMENT_ROOT"]="/var/www/html";
-define("NO_KEEP_STATISTIC", true); define("NOT_CHECK_PERMISSIONS", true);
-require $_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_before.php";
-if (!CModule::IncludeModule("mtai.kerberos")) {
-  require_once $_SERVER["DOCUMENT_ROOT"]."/local/modules/mtai.kerberos/install/index.php";
-  (new mtai_kerberos())->DoInstall();
-  echo "installed\n";
-}'
-```
 
 ## Настройки
 
@@ -137,7 +123,7 @@ server {
 }
 ```
 
-### Caddy (этот стенд)
+### Caddy
 
 У Caddy нет родного SPNEGO-модуля. Варианты:
 
@@ -153,38 +139,39 @@ server {
 подделает кто угодно. Страница настроек и диагностики предупреждают
 об этом явно.
 
-## Тестовый режим стенда (без KDC)
+## Тестовый режим без KDC
 
-На стенде нет домена, поэтому модуль настроен на заголовок `X-Krb-User`,
-который Caddy проксирует в PHP как обычный HTTP-заголовок. Это эмулирует
-«сервер уже проверил пользователя»:
+Когда домена нет (разработка, демо), модуль можно переключить на
+произвольный заголовок — например `X-Krb-User`: прокси передаёт его в PHP
+как обычный HTTP-заголовок, и это эмулирует «сервер уже проверил
+пользователя»:
 
 ```bash
 # автологин существующего пользователя (login или email = UPN)
-curl -k -c /tmp/jar -H 'X-Krb-User: test.user@bitrix.local' https://localhost/ -o /dev/null -v
+curl -k -c /tmp/jar -H 'X-Krb-User: ivanov@CORP.LOCAL' https://portal.corp.local/ -o /dev/null -v
 
 # автосоздание нового пользователя (опция «Создавать пользователя» = да)
-curl -k -c /tmp/jar -H 'X-Krb-User: new.employee@corp.example' https://localhost/ -o /dev/null
+curl -k -c /tmp/jar -H 'X-Krb-User: new.employee@CORP.LOCAL' https://portal.corp.local/ -o /dev/null
 
 # проверить, что сессия авторизована: с cookie / редиректит на /online/
-curl -k -b /tmp/jar -o /dev/null -w '%{http_code} -> %{redirect_url}\n' https://localhost/
+curl -k -b /tmp/jar -o /dev/null -w '%{http_code} -> %{redirect_url}\n' https://portal.corp.local/
 ```
 
 Признак успеха — журнал `upload/mtai.kerberos/sso.log`:
 
 ```
-2026-10-04 13:10:11  authorized  {"id":3,"login":"test.user","upn":"test.user@BITRIX.LOCAL"}
-2026-10-04 13:10:32  user_created  {"id":392,"login":"new.employee","upn":"new.employee@CORP.EXAMPLE"}
+2026-10-04 13:10:11  authorized  {"id":3,"login":"ivanov","upn":"ivanov@CORP.LOCAL"}
+2026-10-04 13:10:32  user_created  {"id":392,"login":"new.employee","upn":"new.employee@CORP.LOCAL"}
 ```
 
 Выход (нужен POST с sessid — GET-logout Bitrix24 игнорирует) и повторный вход:
 
 ```bash
-SID=$(curl -k -b /tmp/jar https://localhost/online/ | grep -o '"sessid":"[a-f0-9]\{32\}"' | head -1 | cut -d'"' -f4)
-curl -k -b /tmp/jar -X POST -d "logout=yes&sessid=$SID" https://localhost/
+SID=$(curl -k -b /tmp/jar https://portal.corp.local/online/ | grep -o '"sessid":"[a-f0-9]\{32\}"' | head -1 | cut -d'"' -f4)
+curl -k -b /tmp/jar -X POST -d "logout=yes&sessid=$SID" https://portal.corp.local/
 # следующий хит с X-Krb-User НЕ заводит обратно: skip_after_logout
 # принудительный повторный SSO-вход:
-curl -k -b /tmp/jar -H 'X-Krb-User: test.user@bitrix.local' 'https://localhost/?krb_relogin=1'
+curl -k -b /tmp/jar -H 'X-Krb-User: ivanov@CORP.LOCAL' 'https://portal.corp.local/?krb_relogin=1'
 ```
 
 ## Диагностика
@@ -239,5 +226,5 @@ mtai.kerberos/
   (`OnAfterUserAuthorize`) или `?krb_relogin=1`.
 - Bitrix24 при автосоздании пользователя может назначить свои группы
   по умолчанию (внутрипортальные), поверх явно указанных в опции.
-- GET `?logout=yes` современный Bitrix24 игнорирует (CSRF) — тесты
-  выхода требуют POST с `sessid`.
+- GET `?logout=yes` современный Bitrix24 игнорирует (CSRF) —
+  разлогинирование выполняется POST-запросом с `sessid`.
